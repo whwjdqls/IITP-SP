@@ -1,7 +1,7 @@
 # IITP_Studio_Project_Team3 - ✈️***Flight HUNTR/X***✈
 
 <p align="center">
-  <img src="images/team_logo.png" alt="Team Logo" width="200"/>
+  <img src="images/Team3_logo.png" alt="Team Logo" width="200"/>
 </p>
 
 > Our project aims to contribute to the Intelligent Flight Tracking Assistant (IFTA) by developing advanced flight data analysis and prediction capabilities through the integration of large language models (LLMs) and multimodal AI technologies.  
