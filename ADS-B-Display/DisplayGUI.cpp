@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <filesystem>
 #include <fileapi.h>
+#include <string>
 #include <System.JSON.hpp>
 #include <System.NetEncoding.hpp>
 #include <mmsystem.h>
@@ -198,6 +199,9 @@ __fastcall TForm1::TForm1(TComponent* Owner)
   ARTCCBoundaryDataPathFileName=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\ARTCC_Boundary_Data\\")+ARTCC_BOUNDARY_FILE;
   BigQueryPath=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\BigQuery\\");
   BigQueryPythonScript= BigQueryPath+ AnsiString(BIG_QUERY_RUN_FILENAME);
+  SpeechWorkerScriptPath=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\scripts\\speech_worker.py");
+  GoogleSpeechLanguageCode=L"en-US";
+  GoogleSpeechModelId=L"latest_long";
   DeleteFilesWithExtension(BigQueryPath, "csv");
   BigQueryLogFileName=BigQueryPath+"BigQuery.log";
   DeleteFileA(BigQueryLogFileName.c_str());
@@ -2102,6 +2106,12 @@ UnicodeString __fastcall TForm1::StartGoogleSpeechRecognition(void)
 {
 	if (!EnsureGoogleSpeechApiKey())
 		return UnicodeString();
+	if (!SpeechWorkerScriptPath.IsEmpty())
+	{
+		UnicodeString workerTranscript = RunPythonSpeechWorker();
+		if (!workerTranscript.IsEmpty())
+			return workerTranscript;
+	}
 	TBytes audioData;
 	if (!CaptureMicrophoneAudio(audioData, GoogleSpeechCaptureMs))
 		return UnicodeString();
@@ -2209,8 +2219,8 @@ UnicodeString __fastcall TForm1::BuildGoogleSpeechPayload(const TBytes &audioByt
 	encoded = StringReplace(encoded, L"\r", L"", TReplaceFlags() << rfReplaceAll);
 	encoded = StringReplace(encoded, L"\n", L"", TReplaceFlags() << rfReplaceAll);
 	UnicodeString payload;
-	payload.sprintf(L"{\"config\":{\"encoding\":\"LINEAR16\",\"sampleRateHertz\":%u,\"languageCode\":\"en-US\",\"model\":\"latest_long\",\"enableAutomaticPunctuation\":true},\"audio\":{\"content\":\"%s\"}}",
-		GoogleSpeechSampleRate, encoded.c_str());
+	payload.sprintf(L"{\"config\":{\"encoding\":\"LINEAR16\",\"sampleRateHertz\":%u,\"languageCode\":\"%s\",\"model\":\"%s\",\"enableAutomaticPunctuation\":true},\"audio\":{\"content\":\"%s\"}}",
+		GoogleSpeechSampleRate, GoogleSpeechLanguageCode.c_str(), GoogleSpeechModelId.c_str(), encoded.c_str());
 	return payload;
 }
 //---------------------------------------------------------------------------
@@ -2255,6 +2265,13 @@ UnicodeString __fastcall TForm1::ExtractGoogleSpeechTranscript(const UnicodeStri
 	TJSONObject *obj = dynamic_cast<TJSONObject*>(root.get());
 	if (!obj)
 		return transcript;
+	TJSONValue *directTranscript = obj->GetValue("transcript");
+	if (directTranscript)
+	{
+		transcript = directTranscript->Value();
+		if (!transcript.IsEmpty())
+			return transcript;
+	}
 	TJSONArray *results = dynamic_cast<TJSONArray*>(obj->GetValue("results"));
 	if (!results || results->Count == 0)
 		return transcript;
@@ -2271,5 +2288,64 @@ UnicodeString __fastcall TForm1::ExtractGoogleSpeechTranscript(const UnicodeStri
 	if (textValue)
 		transcript = textValue->Value();
 	return transcript;
+}
+//---------------------------------------------------------------------------
+
+UnicodeString __fastcall TForm1::RunPythonSpeechWorker(void)
+{
+	if (SpeechWorkerScriptPath.IsEmpty())
+		return UnicodeString();
+	if (!FileExists(SpeechWorkerScriptPath))
+		return UnicodeString();
+	if (GoogleSpeechApiKey.IsEmpty())
+		return UnicodeString();
+
+	double durationSec = static_cast<double>(GoogleSpeechCaptureMs) / 1000.0;
+	UnicodeString durationString;
+	durationString.sprintf(L"%.2f", durationSec);
+
+	UnicodeString command = L"python \"" + SpeechWorkerScriptPath + L"\"";
+	command += L" --duration " + durationString;
+	command += L" --sample-rate " + IntToStr(static_cast<int>(GoogleSpeechSampleRate));
+	command += L" --language " + GoogleSpeechLanguageCode;
+	command += L" --model " + GoogleSpeechModelId;
+
+	UnicodeString previousEnv;
+	wchar_t envBuffer[1024] = {0};
+	const DWORD envBufferLen = static_cast<DWORD>(sizeof(envBuffer) / sizeof(envBuffer[0]));
+	DWORD envLen = GetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", envBuffer, envBufferLen);
+	if (envLen > 0 && envLen < envBufferLen)
+		previousEnv = UnicodeString(envBuffer, envLen);
+	SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", GoogleSpeechApiKey.w_str());
+
+	AnsiString ansiCommand = AnsiString(command);
+	FILE *pipe = _popen(ansiCommand.c_str(), "rt");
+	if (!pipe)
+	{
+		if (previousEnv.IsEmpty())
+			SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", nullptr);
+		else
+			SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", previousEnv.w_str());
+		ShowMessage("Unable to launch Python speech worker.");
+		return UnicodeString();
+	}
+	std::string output;
+	char buffer[512];
+	while (fgets(buffer, sizeof(buffer), pipe))
+	{
+		output += buffer;
+	}
+	_pclose(pipe);
+
+	if (previousEnv.IsEmpty())
+		SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", nullptr);
+	else
+		SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", previousEnv.w_str());
+
+	if (output.empty())
+		return UnicodeString();
+
+	UnicodeString unicodeOutput = UnicodeString(UTF8String(output.c_str()));
+	return ExtractGoogleSpeechTranscript(unicodeOutput);
 }
 //---------------------------------------------------------------------------

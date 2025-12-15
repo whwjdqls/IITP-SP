@@ -243,6 +243,7 @@ private:	// User declarations
     UnicodeString __fastcall ExecuteGoogleSpeechRequest(const UnicodeString &payload);
     UnicodeString __fastcall ExtractGoogleSpeechTranscript(const UnicodeString &responseText);
     UnicodeString __fastcall StartGoogleSpeechRecognition(void);
+    UnicodeString __fastcall RunPythonSpeechWorker(void);
     bool __fastcall EnsureGoogleSpeechApiKey(void);
 
 
@@ -269,6 +270,9 @@ public:		// User declarations
 	    unsigned int                GoogleSpeechSampleRate;
 	    unsigned int                GoogleSpeechCaptureMs;
 	    AnsiString                  GoogleSpeechApiKey;
+	    UnicodeString               SpeechWorkerScriptPath;
+	    UnicodeString               GoogleSpeechLanguageCode;
+	    UnicodeString               GoogleSpeechModelId;
 	int                        MouseDownX,MouseDownY;
 	bool                       MouseDown;
 	TTrackHook                 TrackHook;
