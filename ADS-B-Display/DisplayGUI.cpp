@@ -2243,7 +2243,13 @@ static std::string RunPythonScriptAndGetOutput(const std::string& scriptPath, co
 
     ZeroMemory(&pi, sizeof(pi));
 
+<<<<<<< HEAD
     std::string commandLine = "python \"" + scriptPath + "\" " + args;
+=======
+    // 절대경로 Python 사용
+    std::string pythonPath = "C:\\Users\\JungBinCho\\AppData\\Local\\Programs\\Python\\Python39\\python.exe";
+    std::string commandLine = "\"" + pythonPath + "\" \"" + scriptPath + "\" " + args;
+>>>>>>> 35268514c70f818c0f2f2bf98f18d967ffa5b50a
 
     char* cmdLineCharArray = new char[commandLine.size() + 1];
     strcpy(cmdLineCharArray, commandLine.c_str());
@@ -4079,8 +4085,10 @@ void __fastcall TForm1::CloseBigQueryCSV(void)
         ZeroMemory(&si, sizeof(si));
         si.cb = sizeof(si);
         ZeroMemory(&pi, sizeof(pi));
-
+    // std::string pythonPath = "C:\\Users\\JungBinCho\\AppData\\Local\\Programs\\Python\\Python39\\python.exe";
+    // std::string commandLine = "\"" + pythonPath + "\" \"" + scriptPath + "\" " + args;
         AnsiString commandLine = "python " + scriptPath+" "+args;
+		// AnsiString commandLine = "C:\\Users\\JungBinCho\\AppData\\Local\\Programs\\Python\\Python39\\python.exe "+scriptPath+" "+args;
         char* cmdLineCharArray = new char[strlen(commandLine.c_str()) + 1];
 		strcpy(cmdLineCharArray, commandLine.c_str());
 	#define  LOG_PYTHON 1
@@ -4414,6 +4422,7 @@ void TForm1::SendToLLM(UnicodeString question, UnicodeString context)
 {
     UnicodeString prompt;
 
+<<<<<<< HEAD
     // 명확한 프롬프트 구성
     prompt += UnicodeString(L"You are an assistant for an ADS-B aircraft tracking display system. ");
     prompt += UnicodeString(L"Answer the user's question based on the provided UI data.\n\n");
@@ -4421,10 +4430,17 @@ void TForm1::SendToLLM(UnicodeString question, UnicodeString context)
     prompt += UnicodeString(L"Available UI data:\n") + context + L"\n";
     prompt += UnicodeString(L"\nPlease provide a direct and concise answer in maximum 2 lines. ");
     prompt += UnicodeString(L"Keep your response short and to the point.\n");
+=======
+    // 안전하게 문자열 연결
+    // prompt += L"User question:\n" + question + L"\n\n";
+    prompt += UnicodeString(L"User question:\n") + L"hi" + L"\n\n";
+    prompt += UnicodeString(L"Available UI data:\n") + context + L"\n";
+>>>>>>> 35268514c70f818c0f2f2bf98f18d967ffa5b50a
 
     // Python 스크립트 경로
     AnsiString exeDir = ExtractFilePath(Application->ExeName);
     // AnsiString scriptPath = exeDir + "llm_gemma.py";
+<<<<<<< HEAD
 	AnsiString scriptPath = "C:\\Users\\dmlab\\Documents\\IITP\\ADS-B-Display\\llm_gemma.py";
 
     // prompt를 std::string (UTF-8)으로 변환하고 따옴표로 감싸서 전달
@@ -4440,6 +4456,18 @@ void TForm1::SendToLLM(UnicodeString question, UnicodeString context)
 
     // 결과를 Memo1에 출력
     Memo1->Lines->Add("LLM: " + llmResponseUnicode);
+=======
+	AnsiString scriptPath = "C:\\Users\\JungBinCho\\Documents\\IITP\\ADS-B-Display\\llm_gemma.py";
+
+    // prompt를 std::string (UTF-8)으로 변환
+    std::string args = std::string(UTF8String(prompt).c_str());
+
+    // Python 실행 및 출력 읽기
+    std::string llmResponse = RunPythonScriptAndGetOutput(scriptPath.c_str(), args);
+
+    // 결과를 Memo1에 출력
+    Memo1->Lines->Add("LLM: " + UnicodeString(llmResponse.c_str()));
+>>>>>>> 35268514c70f818c0f2f2bf98f18d967ffa5b50a
 }
 
 

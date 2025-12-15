@@ -27,6 +27,7 @@ response = client.models.generate_content(
 
 # JSON 출력
 # print(json.dumps({"text": response.text[0]}), flush=True)
+<<<<<<< HEAD
 
 # UTF-8로 안전하게 출력 (이모지 등 유니코드 문자 처리)
 output_text = str(response.text)
@@ -41,3 +42,13 @@ except (AttributeError, UnicodeEncodeError):
     safe_text = output_text.encode('ascii', errors='replace').decode('ascii')
     print(safe_text, flush=True)
 
+=======
+print(response.text, flush=True)
+
+
+# print("hello")
+# import json
+
+# print(json.dumps({"text": "hello from gemma"}))
+# print("a")
+>>>>>>> 35268514c70f818c0f2f2bf98f18d967ffa5b50a
