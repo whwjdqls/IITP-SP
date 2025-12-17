@@ -274,7 +274,7 @@ __fastcall TForm1::TForm1(TComponent* Owner)
   TrackHook.Valid_CC=false;
   TrackHook.Valid_CPA=false;
   UseGoogleSpeechRecognition=true;
-  UseGoogleSpeechRefinement=false;
+  UseGoogleSpeechRefinement=true;
   GoogleSpeechSampleRate=16000;
   GoogleSpeechCaptureMs=5000;
   GoogleSpeechHTTPClient=new TNetHTTPClient(this);
@@ -2147,7 +2147,7 @@ void TForm1::SendToLLM(UnicodeString question, UnicodeString context)
     UnicodeString prompt;
 
     // 명확한 프롬프트 구성
-    prompt += UnicodeString(L"You are an assistant for an ADS-B aircraft tracking display system. ");
+    // prompt += UnicodeString(L"You are an assistant for an ADS-B aircraft tracking display system. ");
     prompt += UnicodeString(L"Answer the user's question based on the provided UI data.\n\n");
     prompt += UnicodeString(L"User question: ") + question + L"\n\n";
     prompt += UnicodeString(L"Available UI data:\n") + context + L"\n";
@@ -2461,7 +2461,7 @@ UnicodeString __fastcall TForm1::RunPythonSpeechWorker(void)
     std::string scriptPath = std::string(AnsiString(SpeechWorkerScriptPath).c_str());
 
     std::string output = RunPythonScriptAndGetOutput(scriptPath, args);
-	Memo1->Lines->Add(UnicodeString(UTF8String(output.c_str())));
+	// Memo1->Lines->Add(UnicodeString(UTF8String(output.c_str())));
 	UnicodeString transcript = UnicodeString(UTF8String(output.c_str()));
 
 	return transcript;

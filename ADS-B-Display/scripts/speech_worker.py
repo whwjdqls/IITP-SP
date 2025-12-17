@@ -108,7 +108,13 @@ def main() -> None:
 
     if args.refinement:
         client = genai.Client(api_key="AIzaSyBz420tptEuhbGHUyTuQ5Q9_WtzL9cYid0")
-        prompt = f"Below text if from the speech, Please refine it well-aligned with the speech {transcript}. Do not add extra text just refine the input text"
+        prompt = f"""You are a speech-to-text refinement assistant.
+                    Your task is to correct errors in an automatically generated speech transcript.
+                    Only fix errors that are very likely caused by speech recognition mistakes.
+                    Do NOT add new information.
+                    Do NOT remove meaningful content.
+                    Preserve the original meaning, intent, and speaking style as much as possible.
+                    If a word or phrase is ambiguous or uncertain, keep the original wording. Transcript: {transcript}"""
         response = client.models.generate_content(
             model="gemma-3-27b-it",
             contents=prompt,
