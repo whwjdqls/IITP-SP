@@ -263,10 +263,13 @@ public:		// User declarations
     void __fastcall CreateBigQueryCSV(void);
     void __fastcall CloseBigQueryCSV(void);
     bool __fastcall LoadARTCCBoundaries(AnsiString FileName);
-
+    
+	UnicodeString __fastcall CollectUIContextForLLM(void);
+    void __fastcall SendToLLM(UnicodeString question, UnicodeString context);
 	    ISpeechRecoGrammar         *SRGrammar; // TODO: Drop this once Google Cloud Speech is integrated.
 	    TNetHTTPClient             *GoogleSpeechHTTPClient;
 	    bool                        UseGoogleSpeechRecognition;
+		bool 						UseGoogleSpeechRefinement;
 	    unsigned int                GoogleSpeechSampleRate;
 	    unsigned int                GoogleSpeechCaptureMs;
 	    AnsiString                  GoogleSpeechApiKey;

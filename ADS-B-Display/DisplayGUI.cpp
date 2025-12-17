@@ -60,7 +60,7 @@
 #pragma link "HashTable\Lib\Win64\Release\HashTableLib.a"
 #pragma link "cspin"
 #pragma link "SpeechLib_OCX"
-#pragma comment(lib, "winmm.lib")
+// #pragma comment(lib, "winmm.lib")
 #pragma resource "*.dfm"
 TForm1 *Form1;
  //---------------------------------------------------------------------------
@@ -191,6 +191,68 @@ static char *stristr(const char *String, const char *Pattern)
 }
 //---------------------------------------------------------------------------
 
+static std::string RunPythonScriptAndGetOutput(const std::string& scriptPath, const std::string& args)
+{
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hStdOutRead = NULL;
+    HANDLE hStdOutWrite = NULL;
+
+    if (!CreatePipe(&hStdOutRead, &hStdOutWrite, &sa, 0))
+        return "";
+
+    SetHandleInformation(hStdOutRead, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.hStdOutput = hStdOutWrite;
+    si.hStdError  = hStdOutWrite;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    ZeroMemory(&pi, sizeof(pi));
+
+    // 절대경로 Python 사용
+    // std::string pythonPath = "C:\\Users\\JungBinCho\\AppData\\Local\\Programs\\Python\\Python39\\python.exe";
+    std::string pythonPath = "C:\\Users\\Siyeol Jung\\AppData\\Local\\Programs\\Python\\Python311\\python.exe";
+	std::string commandLine = "\"" + pythonPath + "\" \"" + scriptPath + "\" " + args;
+
+    char* cmdLineCharArray = new char[commandLine.size() + 1];
+    strcpy(cmdLineCharArray, commandLine.c_str());
+
+    if (!CreateProcessA(NULL, cmdLineCharArray, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    {
+        delete[] cmdLineCharArray;
+        CloseHandle(hStdOutRead);
+        CloseHandle(hStdOutWrite);
+        return "";
+    }
+
+    delete[] cmdLineCharArray;
+    CloseHandle(hStdOutWrite);
+
+    std::stringstream outputStream;
+    char buffer[4096];
+    DWORD bytesRead;
+
+    while (ReadFile(hStdOutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0)
+    {
+        buffer[bytesRead] = '\0';
+        outputStream << buffer;
+    }
+
+    CloseHandle(hStdOutRead);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return outputStream.str();
+}
+
 //---------------------------------------------------------------------------
 __fastcall TForm1::TForm1(TComponent* Owner)
 	: TForm(Owner)
@@ -199,7 +261,7 @@ __fastcall TForm1::TForm1(TComponent* Owner)
   ARTCCBoundaryDataPathFileName=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\ARTCC_Boundary_Data\\")+ARTCC_BOUNDARY_FILE;
   BigQueryPath=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\BigQuery\\");
   BigQueryPythonScript= BigQueryPath+ AnsiString(BIG_QUERY_RUN_FILENAME);
-  SpeechWorkerScriptPath=ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\scripts\\speech_worker.py");
+  SpeechWorkerScriptPath= "C:\\Users\\Siyeol Jung\\Desktop\\IITP-SP\\ADS-B-Display\\scripts\\speech_worker.py"; //ExtractFilePath(ExtractFileDir(Application->ExeName)) +AnsiString("..\\scripts\\speech_worker.py");
   GoogleSpeechLanguageCode=L"en-US";
   GoogleSpeechModelId=L"latest_long";
   DeleteFilesWithExtension(BigQueryPath, "csv");
@@ -212,6 +274,7 @@ __fastcall TForm1::TForm1(TComponent* Owner)
   TrackHook.Valid_CC=false;
   TrackHook.Valid_CPA=false;
   UseGoogleSpeechRecognition=true;
+  UseGoogleSpeechRefinement=false;
   GoogleSpeechSampleRate=16000;
   GoogleSpeechCaptureMs=5000;
   GoogleSpeechHTTPClient=new TNetHTTPClient(this);
@@ -2071,14 +2134,58 @@ static int FinshARTCCBoundary(void)
 }
 //---------------------------------------------------------------------------
 
-void __fastcall TForm1::SpSharedRecoContext1Recognition(TObject *Sender, long StreamNumber,
-          Variant StreamPosition, SpeechRecognitionType RecognitionType,
-          ISpeechRecoResult *Result)
+UnicodeString TForm1::CollectUIContextForLLM()
 {
- if (UseGoogleSpeechRecognition)
-  return;
- // TODO: Swap this SAPI callback with the Google Cloud Speech streaming response handler.
- Memo1->Lines->Add( Result->PhraseInfo->GetText(0, -1, True) );
+    UnicodeString ctx;
+    // 필요 최소한의 정보만 추가
+	ctx += UnicodeString(L"viewable_tracks=") + ViewableAircraftCountLabel->Caption + UnicodeString(L"\n");
+    return ctx;
+}
+
+void TForm1::SendToLLM(UnicodeString question, UnicodeString context)
+{
+    UnicodeString prompt;
+
+    // 명확한 프롬프트 구성
+    prompt += UnicodeString(L"You are an assistant for an ADS-B aircraft tracking display system. ");
+    prompt += UnicodeString(L"Answer the user's question based on the provided UI data.\n\n");
+    prompt += UnicodeString(L"User question: ") + question + L"\n\n";
+    prompt += UnicodeString(L"Available UI data:\n") + context + L"\n";
+    prompt += UnicodeString(L"\nPlease provide a direct and concise answer in maximum 2 lines. ");
+    prompt += UnicodeString(L"Keep your response short and to the point.\n");
+
+    // Python 스크립트 경로
+    AnsiString exeDir = ExtractFilePath(Application->ExeName);
+    // AnsiString scriptPath = exeDir + "llm_gemma.py";
+	AnsiString scriptPath = "C:\\Users\\Siyeol Jung\\Desktop\\IITP-SP\\ADS-B-Display\\scripts\\llm_gemma.py";
+
+    // prompt를 std::string (UTF-8)으로 변환하고 따옴표로 감싸서 전달
+    std::string promptUtf8 = std::string(UTF8String(prompt).c_str());
+    // 명령줄 인자로 전달할 때 따옴표 처리
+    std::string args = "\"" + promptUtf8 + "\"";
+
+    // Python 실행 및 출력 읽기 (UTF-8 인코딩으로 받음)
+    std::string llmResponse = RunPythonScriptAndGetOutput(scriptPath.c_str(), args);
+
+    // UTF-8 문자열을 UnicodeString으로 변환
+    UnicodeString llmResponseUnicode = UTF8String(llmResponse.c_str());
+
+    // 결과를 Memo1에 출력
+    Memo1->Lines->Add("LLM: " + llmResponseUnicode);
+}
+
+void __fastcall TForm1::SpSharedRecoContext1Recognition(
+    TObject *Sender, long StreamNumber,
+    Variant StreamPosition, SpeechRecognitionType RecognitionType,
+    ISpeechRecoResult *Result)
+{
+    UnicodeString recognizedText = Result->PhraseInfo->GetText(0, -1, True);
+    Memo1->Lines->Add("User: " + recognizedText);
+    UnicodeString uiContext = CollectUIContextForLLM();
+    // TThread를 사용해 별도 쓰레드에서 LLM 호출
+    //Thread::CreateAnonymousThread([this, recognizedText, uiContext]() {
+	SendToLLM(recognizedText, uiContext);
+    //})->Start();
 }
 //---------------------------------------------------------------------------
 
@@ -2087,265 +2194,276 @@ void __fastcall TForm1::LIstenClick(TObject *Sender)
     Memo1->Visible=true;
 	if (UseGoogleSpeechRecognition)
 	{
-		UnicodeString transcript = StartGoogleSpeechRecognition();
-		if (!transcript.IsEmpty())
+		EnsureGoogleSpeechApiKey();
+		UnicodeString recognizedText = RunPythonSpeechWorker();
+		UnicodeString uiContext = CollectUIContextForLLM();
+
+		if (!recognizedText.IsEmpty())
 		{
-			Memo1->Lines->Add(transcript);
+			Memo1->Lines->Add("User: " + recognizedText);
+			SendToLLM(recognizedText, uiContext);
 		}
 		return;
 	}
-	// TODO: Initialize Google Cloud Speech streaming here instead of the legacy SAPI grammar setup.
-	SpSharedRecoContext1->EventInterests = SpeechRecoEvents::SREAllEvents;
-	SRGrammar=SpSharedRecoContext1->CreateGrammar(Variant(0));
-	SRGrammar->CmdSetRuleIdState(0, SpeechRuleState::SGDSActive);
-	SRGrammar->DictationSetState(SpeechRuleState::SGDSActive);
+	else{
+		// TODO: Initialize Google Cloud Speech streaming here instead of the legacy SAPI grammar setup.		        SpSharedRecoContext1->Connect();
+			SpSharedRecoContext1->Connect();
+			SpSharedRecoContext1->EventInterests = SpeechRecoEvents::SREAllEvents;
+			SRGrammar=SpSharedRecoContext1->CreateGrammar(Variant(0));
+			SRGrammar->CmdSetRuleIdState(0, SpeechRuleState::SGDSActive);
+			SRGrammar->DictationSetState(SpeechRuleState::SGDSActive);
+		}
 }
+		
 //---------------------------------------------------------------------------
 
-UnicodeString __fastcall TForm1::StartGoogleSpeechRecognition(void)
-{
-	if (!EnsureGoogleSpeechApiKey())
-		return UnicodeString();
-	if (!SpeechWorkerScriptPath.IsEmpty())
-	{
-		UnicodeString workerTranscript = RunPythonSpeechWorker();
-		if (!workerTranscript.IsEmpty())
-			return workerTranscript;
-	}
-	TBytes audioData;
-	if (!CaptureMicrophoneAudio(audioData, GoogleSpeechCaptureMs))
-		return UnicodeString();
-	UnicodeString payload = BuildGoogleSpeechPayload(audioData);
-	UnicodeString response = ExecuteGoogleSpeechRequest(payload);
-	if (response.IsEmpty())
-		return UnicodeString();
-	UnicodeString transcript = ExtractGoogleSpeechTranscript(response);
-	return transcript;
-}
+// UnicodeString __fastcall TForm1::StartGoogleSpeechRecognition(void)
+// {
+// 	if (!EnsureGoogleSpeechApiKey())
+// 		return UnicodeString();
+// 	if (!SpeechWorkerScriptPath.IsEmpty())
+// 	{
+// 		UnicodeString workerTranscript = RunPythonSpeechWorker();
+// 		if (!workerTranscript.IsEmpty())
+// 			return workerTranscript;
+// 	}
+// 	TBytes audioData;
+// 	if (!CaptureMicrophoneAudio(audioData, GoogleSpeechCaptureMs))
+// 		return UnicodeString();
+// 	UnicodeString payload = BuildGoogleSpeechPayload(audioData);
+// 	UnicodeString response = ExecuteGoogleSpeechRequest(payload);
+// 	if (response.IsEmpty())
+// 		return UnicodeString();
+// 	UnicodeString transcript = ExtractGoogleSpeechTranscript(response);
+// 	return transcript;
+// }
 //---------------------------------------------------------------------------
 
 bool __fastcall TForm1::EnsureGoogleSpeechApiKey(void)
 {
+	GoogleSpeechApiKey = "AIzaSyCJxDGwkaKdEedfzl1jHkjwEaPFg3T3f5w";
+	SetEnvironmentVariableW(L"GOOGLE_SPEECH_API_KEY", L"AIzaSyCJxDGwkaKdEedfzl1jHkjwEaPFg3T3f5w");
 	if (!GoogleSpeechApiKey.IsEmpty())
 		return true;
-	wchar_t buffer[512] = {0};
-	const DWORD bufferLength = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
-	DWORD len = GetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", buffer, bufferLength);
-	if (len > 0 && len < bufferLength)
-		GoogleSpeechApiKey = UnicodeString(buffer, len);
-	if (GoogleSpeechApiKey.IsEmpty())
-	{
-		UnicodeString promptValue;
-		if (InputQuery("Google Speech API", "Enter GOOGLE_SPEECH_API_KEY value:", promptValue))
-		{
-			promptValue = promptValue.Trim();
-			if (!promptValue.IsEmpty())
-			{
-				GoogleSpeechApiKey = promptValue;
-				return true;
-			}
-		}
-		ShowMessage("Set the GOOGLE_SPEECH_API_KEY environment variable or provide it when prompted.");
-		return false;
-	}
-	return true;
 }
 //---------------------------------------------------------------------------
 
-bool __fastcall TForm1::CaptureMicrophoneAudio(TBytes &buffer, unsigned int durationMs)
-{
-	WAVEFORMATEX wfx = {};
-	wfx.wFormatTag = WAVE_FORMAT_PCM;
-	wfx.nChannels = 1;
-	wfx.nSamplesPerSec = GoogleSpeechSampleRate;
-	wfx.wBitsPerSample = 16;
-	wfx.nBlockAlign = wfx.nChannels * (wfx.wBitsPerSample / 8);
-	wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
-	HWAVEIN waveInHandle = nullptr;
-	MMRESULT result = waveInOpen(&waveInHandle, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL);
-	if (result != MMSYSERR_NOERROR)
-	{
-		ShowMessage("Unable to access the default microphone device.");
-		return false;
-	}
-	size_t bufferSize = (static_cast<size_t>(wfx.nAvgBytesPerSec) * durationMs) / 1000;
-	if (bufferSize == 0)
-		bufferSize = wfx.nAvgBytesPerSec;
-	std::vector<BYTE> capture(bufferSize);
-	WAVEHDR header = {};
-	header.lpData = reinterpret_cast<LPSTR>(capture.data());
-	header.dwBufferLength = bufferSize;
-	result = waveInPrepareHeader(waveInHandle, &header, sizeof(header));
-	if (result != MMSYSERR_NOERROR)
-	{
-		waveInClose(waveInHandle);
-		ShowMessage("Failed to prepare microphone buffer.");
-		return false;
-	}
-	result = waveInAddBuffer(waveInHandle, &header, sizeof(header));
-	if (result != MMSYSERR_NOERROR)
-	{
-		waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
-		waveInClose(waveInHandle);
-		ShowMessage("Failed to queue microphone buffer.");
-		return false;
-	}
-	result = waveInStart(waveInHandle);
-	if (result != MMSYSERR_NOERROR)
-	{
-		waveInReset(waveInHandle);
-		waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
-		waveInClose(waveInHandle);
-		ShowMessage("Failed to start microphone capture.");
-		return false;
-	}
-	while (!(header.dwFlags & WHDR_DONE))
-		Sleep(50);
-	waveInStop(waveInHandle);
-	waveInReset(waveInHandle);
-	waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
-	waveInClose(waveInHandle);
-	const int byteCount = static_cast<int>(bufferSize);
-	buffer.Length = byteCount;
-	if (byteCount > 0)
-		memcpy(&buffer[0], capture.data(), byteCount);
-	return true;
-}
+// bool __fastcall TForm1::CaptureMicrophoneAudio(TBytes &buffer, unsigned int durationMs)
+// {
+// 	WAVEFORMATEX wfx = {};
+// 	wfx.wFormatTag = WAVE_FORMAT_PCM;
+// 	wfx.nChannels = 1;
+// 	wfx.nSamplesPerSec = GoogleSpeechSampleRate;
+// 	wfx.wBitsPerSample = 16;
+// 	wfx.nBlockAlign = wfx.nChannels * (wfx.wBitsPerSample / 8);
+// 	wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+// 	HWAVEIN waveInHandle = nullptr;
+// 	MMRESULT result = waveInOpen(&waveInHandle, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL);
+// 	if (result != MMSYSERR_NOERROR)
+// 	{
+// 		ShowMessage("Unable to access the default microphone device.");
+// 		return false;
+// 	}
+// 	size_t bufferSize = (static_cast<size_t>(wfx.nAvgBytesPerSec) * durationMs) / 1000;
+// 	if (bufferSize == 0)
+// 		bufferSize = wfx.nAvgBytesPerSec;
+// 	std::vector<BYTE> capture(bufferSize);
+// 	WAVEHDR header = {};
+// 	header.lpData = reinterpret_cast<LPSTR>(capture.data());
+// 	header.dwBufferLength = bufferSize;
+// 	result = waveInPrepareHeader(waveInHandle, &header, sizeof(header));
+// 	if (result != MMSYSERR_NOERROR)
+// 	{
+// 		waveInClose(waveInHandle);
+// 		ShowMessage("Failed to prepare microphone buffer.");
+// 		return false;
+// 	}
+// 	result = waveInAddBuffer(waveInHandle, &header, sizeof(header));
+// 	if (result != MMSYSERR_NOERROR)
+// 	{
+// 		waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
+// 		waveInClose(waveInHandle);
+// 		ShowMessage("Failed to queue microphone buffer.");
+// 		return false;
+// 	}
+// 	result = waveInStart(waveInHandle);
+// 	if (result != MMSYSERR_NOERROR)
+// 	{
+// 		waveInReset(waveInHandle);
+// 		waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
+// 		waveInClose(waveInHandle);
+// 		ShowMessage("Failed to start microphone capture.");
+// 		return false;
+// 	}
+// 	while (!(header.dwFlags & WHDR_DONE))
+// 		Sleep(50);
+// 	waveInStop(waveInHandle);
+// 	waveInReset(waveInHandle);
+// 	waveInUnprepareHeader(waveInHandle, &header, sizeof(header));
+// 	waveInClose(waveInHandle);
+// 	const int byteCount = static_cast<int>(bufferSize);
+// 	buffer.Length = byteCount;
+// 	if (byteCount > 0)
+// 		memcpy(&buffer[0], capture.data(), byteCount);
+// 	return true;
+// }
 //---------------------------------------------------------------------------
 
-UnicodeString __fastcall TForm1::BuildGoogleSpeechPayload(const TBytes &audioBytes)
-{
-	UnicodeString encoded = TNetEncoding::Base64->EncodeBytesToString(audioBytes);
-	encoded = StringReplace(encoded, L"\r", L"", TReplaceFlags() << rfReplaceAll);
-	encoded = StringReplace(encoded, L"\n", L"", TReplaceFlags() << rfReplaceAll);
-	UnicodeString payload;
-	payload.sprintf(L"{\"config\":{\"encoding\":\"LINEAR16\",\"sampleRateHertz\":%u,\"languageCode\":\"%s\",\"model\":\"%s\",\"enableAutomaticPunctuation\":true},\"audio\":{\"content\":\"%s\"}}",
-		GoogleSpeechSampleRate, GoogleSpeechLanguageCode.c_str(), GoogleSpeechModelId.c_str(), encoded.c_str());
-	return payload;
-}
+// UnicodeString __fastcall TForm1::BuildGoogleSpeechPayload(const TBytes &audioBytes)
+// {
+// 	UnicodeString encoded = TNetEncoding::Base64->EncodeBytesToString(audioBytes);
+// 	encoded = StringReplace(encoded, L"\r", L"", TReplaceFlags() << rfReplaceAll);
+// 	encoded = StringReplace(encoded, L"\n", L"", TReplaceFlags() << rfReplaceAll);
+// 	UnicodeString payload;
+// 	payload.sprintf(L"{\"config\":{\"encoding\":\"LINEAR16\",\"sampleRateHertz\":%u,\"languageCode\":\"%s\",\"model\":\"%s\",\"enableAutomaticPunctuation\":true},\"audio\":{\"content\":\"%s\"}}",
+// 		GoogleSpeechSampleRate, GoogleSpeechLanguageCode.c_str(), GoogleSpeechModelId.c_str(), encoded.c_str());
+// 	return payload;
+// }
 //---------------------------------------------------------------------------
 
-UnicodeString __fastcall TForm1::ExecuteGoogleSpeechRequest(const UnicodeString &payload)
-{
-	if (!GoogleSpeechHTTPClient)
-		return UnicodeString();
-	std::unique_ptr<TStringStream> payloadStream(new TStringStream(payload, TEncoding::UTF8, false));
-	std::unique_ptr<TMemoryStream> responseStream(new TMemoryStream());
-	try
-	{
-		UnicodeString url = L"https://speech.googleapis.com/v1/speech:recognize?key=" + UnicodeString(GoogleSpeechApiKey);
-		GoogleSpeechHTTPClient->ContentType = "application/json";
-		GoogleSpeechHTTPClient->Post(url, payloadStream.get(), responseStream.get());
-		responseStream->Position = 0;
-		const __int64 responseSize = responseStream->Size;
-		if (responseSize <= 0)
-			return UnicodeString();
-			TBytes responseBytes;
-			const int bytesToRead = static_cast<int>(responseSize);
-			responseBytes.Length = bytesToRead;
-			responseStream->Read(&responseBytes[0], bytesToRead);
-			return TEncoding::UTF8->GetString(responseBytes);
-	}
-	catch (const Exception &e)
-	{
-		ShowMessage("Google Speech request failed: " + e.Message);
-		return UnicodeString();
-	}
-}
+// UnicodeString __fastcall TForm1::ExecuteGoogleSpeechRequest(const UnicodeString &payload)
+// {
+// 	if (!GoogleSpeechHTTPClient)
+// 		return UnicodeString();
+// 	std::unique_ptr<TStringStream> payloadStream(new TStringStream(payload, TEncoding::UTF8, false));
+// 	std::unique_ptr<TMemoryStream> responseStream(new TMemoryStream());
+// 	try
+// 	{
+// 		UnicodeString url = L"https://speech.googleapis.com/v1/speech:recognize?key=" + UnicodeString(GoogleSpeechApiKey);
+// 		GoogleSpeechHTTPClient->ContentType = "application/json";
+// 		GoogleSpeechHTTPClient->Post(url, payloadStream.get(), responseStream.get());
+// 		responseStream->Position = 0;
+// 		const __int64 responseSize = responseStream->Size;
+// 		if (responseSize <= 0)
+// 			return UnicodeString();
+// 			TBytes responseBytes;
+// 			const int bytesToRead = static_cast<int>(responseSize);
+// 			responseBytes.Length = bytesToRead;
+// 			responseStream->Read(&responseBytes[0], bytesToRead);
+// 			return TEncoding::UTF8->GetString(responseBytes);
+// 	}
+// 	catch (const Exception &e)
+// 	{
+// 		ShowMessage("Google Speech request failed: " + e.Message);
+// 		return UnicodeString();
+// 	}
+// }
 //---------------------------------------------------------------------------
 
-UnicodeString __fastcall TForm1::ExtractGoogleSpeechTranscript(const UnicodeString &responseText)
-{
-	UnicodeString transcript;
-	if (responseText.IsEmpty())
-		return transcript;
-	std::unique_ptr<TJSONValue> root(TJSONObject::ParseJSONValue(responseText));
-	if (!root)
-		return transcript;
-	TJSONObject *obj = dynamic_cast<TJSONObject*>(root.get());
-	if (!obj)
-		return transcript;
-	TJSONValue *directTranscript = obj->GetValue("transcript");
-	if (directTranscript)
-	{
-		transcript = directTranscript->Value();
-		if (!transcript.IsEmpty())
-			return transcript;
-	}
-	TJSONArray *results = dynamic_cast<TJSONArray*>(obj->GetValue("results"));
-	if (!results || results->Count == 0)
-		return transcript;
-	TJSONObject *firstResult = dynamic_cast<TJSONObject*>(results->Items[0]);
-	if (!firstResult)
-		return transcript;
-	TJSONArray *alternatives = dynamic_cast<TJSONArray*>(firstResult->GetValue("alternatives"));
-	if (!alternatives || alternatives->Count == 0)
-		return transcript;
-	TJSONObject *best = dynamic_cast<TJSONObject*>(alternatives->Items[0]);
-	if (!best)
-		return transcript;
-	TJSONValue *textValue = best->GetValue("transcript");
-	if (textValue)
-		transcript = textValue->Value();
-	return transcript;
-}
+// UnicodeString __fastcall TForm1::ExtractGoogleSpeechTranscript(const UnicodeString &responseText)
+// {
+// 	UnicodeString transcript;
+// 	if (responseText.IsEmpty())
+// 		return transcript;
+// 	std::unique_ptr<TJSONValue> root(TJSONObject::ParseJSONValue(responseText));
+// 	if (!root)
+// 		return transcript;
+// 	TJSONObject *obj = dynamic_cast<TJSONObject*>(root.get());
+// 	if (!obj)
+// 		return transcript;
+// 	TJSONValue *directTranscript = obj->GetValue("transcript");
+// 	if (directTranscript)
+// 	{
+// 		transcript = directTranscript->Value();
+// 		if (!transcript.IsEmpty())
+// 			return transcript;
+// 	}
+// 	TJSONArray *results = dynamic_cast<TJSONArray*>(obj->GetValue("results"));
+// 	if (!results || results->Count == 0)
+// 		return transcript;
+// 	TJSONObject *firstResult = dynamic_cast<TJSONObject*>(results->Items[0]);
+// 	if (!firstResult)
+// 		return transcript;
+// 	TJSONArray *alternatives = dynamic_cast<TJSONArray*>(firstResult->GetValue("alternatives"));
+// 	if (!alternatives || alternatives->Count == 0)
+// 		return transcript;
+// 	TJSONObject *best = dynamic_cast<TJSONObject*>(alternatives->Items[0]);
+// 	if (!best)
+// 		return transcript;
+// 	TJSONValue *textValue = best->GetValue("transcript");
+// 	if (textValue)
+// 		transcript = textValue->Value();
+// 	return transcript;
+// }
 //---------------------------------------------------------------------------
+
+static std::string QuoteIfNeeded(const std::string& s)
+{
+    // 공백이 없으면 그대로
+    if (s.find(' ') == std::string::npos && s.find('\t') == std::string::npos)
+        return s;
+    // 공백 있으면 "..."로 감싸고, 내부 "는 \"로
+    std::string out = "\"";
+    for (char c : s)
+    {
+        if (c == '\"') out += "\\\"";
+        else out += c;
+    }
+    out += "\"";
+    return out;
+}
+
+static UnicodeString ExtractTranscriptFromWorkerJson(const UnicodeString& jsonText)
+{
+    // worker는 {"transcript": "...", "raw_response": {...}} 형태로 출력
+    std::unique_ptr<TJSONValue> root(TJSONObject::ParseJSONValue(jsonText));
+    if (!root) return UnicodeString();
+
+    TJSONObject* obj = dynamic_cast<TJSONObject*>(root.get());
+    if (!obj) return UnicodeString();
+
+    TJSONValue* v = obj->GetValue("transcript");
+    if (!v) return UnicodeString();
+
+    // JSON string value
+    return v->Value();
+}
 
 UnicodeString __fastcall TForm1::RunPythonSpeechWorker(void)
 {
-	if (SpeechWorkerScriptPath.IsEmpty())
-		return UnicodeString();
-	if (!FileExists(SpeechWorkerScriptPath))
-		return UnicodeString();
-	if (GoogleSpeechApiKey.IsEmpty())
-		return UnicodeString();
+    if (SpeechWorkerScriptPath.IsEmpty())
+        return UnicodeString();
+    if (!FileExists(SpeechWorkerScriptPath))
+        return UnicodeString();
 
-	double durationSec = static_cast<double>(GoogleSpeechCaptureMs) / 1000.0;
-	UnicodeString durationString;
-	durationString.sprintf(L"%.2f", durationSec);
+	// Memo1->Lines->Add("RunPythonSpeechWorker");
 
-	UnicodeString command = L"python \"" + SpeechWorkerScriptPath + L"\"";
-	command += L" --duration " + durationString;
-	command += L" --sample-rate " + IntToStr(static_cast<int>(GoogleSpeechSampleRate));
-	command += L" --language " + GoogleSpeechLanguageCode;
-	command += L" --model " + GoogleSpeechModelId;
 
-	UnicodeString previousEnv;
-	wchar_t envBuffer[1024] = {0};
-	const DWORD envBufferLen = static_cast<DWORD>(sizeof(envBuffer) / sizeof(envBuffer[0]));
-	DWORD envLen = GetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", envBuffer, envBufferLen);
-	if (envLen > 0 && envLen < envBufferLen)
-		previousEnv = UnicodeString(envBuffer, envLen);
-	SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", GoogleSpeechApiKey.w_str());
+    // python worker가 환경변수 GOOGLE_SPEECH_API_KEY를 읽으므로 여기 유지
+    // if (GoogleSpeechApiKey.IsEmpty())
+    //     return UnicodeString();
 
-	AnsiString ansiCommand = AnsiString(command);
-	FILE *pipe = _popen(ansiCommand.c_str(), "rt");
-	if (!pipe)
+    // duration (ms -> sec)
+    double durationSec = static_cast<double>(GoogleSpeechCaptureMs) / 1000.0;
+    UnicodeString durationW;
+    durationW.sprintf(L"%.2f", durationSec);
+
+    // env backup + set
+    UnicodeString previousEnv;
+    wchar_t envBuffer[1024] = {0};
+    const DWORD envBufferLen = static_cast<DWORD>(sizeof(envBuffer) / sizeof(envBuffer[0]));
+    // DWORD envLen = GetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", envBuffer, envBufferLen);
+    // if (envLen > 0 && envLen < envBufferLen)
+    //     previousEnv = UnicodeString(envBuffer, envLen);
+
+    // SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", GoogleSpeechApiKey.w_str());
+
+    // args 구성 (speech_worker.py의 argparse에 정확히 맞춤)
+    std::string args;
+    args += " --duration " + std::string(AnsiString(durationW).c_str());
+    args += " --sample-rate " + std::to_string((int)GoogleSpeechSampleRate);
+    args += " --language " + QuoteIfNeeded(std::string(AnsiString(GoogleSpeechLanguageCode).c_str()));
+    args += " --model " + QuoteIfNeeded(std::string(AnsiString(GoogleSpeechModelId).c_str()));
+	if (UseGoogleSpeechRefinement)
 	{
-		if (previousEnv.IsEmpty())
-			SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", nullptr);
-		else
-			SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", previousEnv.w_str());
-		ShowMessage("Unable to launch Python speech worker.");
-		return UnicodeString();
+		args += " --refinement";
 	}
-	std::string output;
-	char buffer[512];
-	while (fgets(buffer, sizeof(buffer), pipe))
-	{
-		output += buffer;
-	}
-	_pclose(pipe);
+    std::string scriptPath = std::string(AnsiString(SpeechWorkerScriptPath).c_str());
 
-	if (previousEnv.IsEmpty())
-		SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", nullptr);
-	else
-		SetEnvironmentVariable(L"GOOGLE_SPEECH_API_KEY", previousEnv.w_str());
+    std::string output = RunPythonScriptAndGetOutput(scriptPath, args);
+	Memo1->Lines->Add(UnicodeString(UTF8String(output.c_str())));
+	UnicodeString transcript = UnicodeString(UTF8String(output.c_str()));
 
-	if (output.empty())
-		return UnicodeString();
-
-	UnicodeString unicodeOutput = UnicodeString(UTF8String(output.c_str()));
-	return ExtractGoogleSpeechTranscript(unicodeOutput);
+	return transcript;
 }
 //---------------------------------------------------------------------------
